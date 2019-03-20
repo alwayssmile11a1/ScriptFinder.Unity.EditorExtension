@@ -1,0 +1,1 @@
+# ScriptFinder.Unity.EditorExtension
