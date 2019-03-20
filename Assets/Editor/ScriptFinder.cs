@@ -136,7 +136,7 @@ public class ScriptFinder : EditorWindow
                 GUILayout.Label(pair.Value, GUILayout.Height(30));
                 if (GUILayout.Button("Import", GUILayout.Width(60), GUILayout.Height(20)))
                 {
-                    ImportFile(pair.Key);
+                    ImportFile(pair.Key, pair.Value);
                 }
 
                 EditorGUILayout.EndHorizontal();
@@ -260,11 +260,12 @@ public class ScriptFinder : EditorWindow
         Repaint();
     }
 
-    private void ImportFile(string file)
+    private void ImportFile(string file, string newFileName)
     {
         string folderToImport = Path.Combine(Directory.GetCurrentDirectory(), "Assets","Scripts");
         if (!Directory.Exists(folderToImport)) Directory.CreateDirectory(folderToImport);
-        FileUtil.CopyFileOrDirectory(file, folderToImport);
+        File.Copy(file, Path.Combine(folderToImport, newFileName));
+        AssetDatabase.Refresh();
     }
 
 }
