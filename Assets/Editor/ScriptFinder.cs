@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -8,17 +9,19 @@ using UnityEngine;
 public class ScriptFinder : EditorWindow
 {
     private static readonly string TITLE = "ScriptFinder";
-    private static readonly Vector2 m_MinSize = new Vector2(500, 200);
+    private static readonly Vector2 m_MinSize = new Vector2(500, 250);
 
     private static ScriptFinder Instance = null;
     private string m_SearchString;
+    private static string m_DefaultImportFolder;
     private static List<string> m_LocalPaths = new List<string>();
     private static List<string> m_RemotePaths = new List<string>();
     private static int m_LocalPathsCount;
     private static int m_RemotePathsCount;
     private bool m_Focused = false;
     private int m_CurrentTab = 0;
-    private Vector2 m_CurrentScrollPos;
+    private Vector2 m_CurrentScrollPos1;
+    private Vector2 m_CurrentScrollPos2;
     private List<KeyValuePair<string, string>> m_Results = new List<KeyValuePair<string, string>>();
 
     [MenuItem("Tools/ScriptFinder #t")]
@@ -67,6 +70,16 @@ public class ScriptFinder : EditorWindow
                 m_RemotePaths = new List<string>(remotePaths);
                 m_RemotePathsCount = m_RemotePaths.Count;
             }
+
+            if (EditorPrefs.HasKey("ScriptFinderDefaultImportFolder"))
+            {
+                m_DefaultImportFolder = EditorPrefs.GetString("ScriptFinderDefaultImportFolder");
+            }
+            else
+            {
+                m_DefaultImportFolder = "Scripts";
+            }
+               
         }
     }
 
@@ -74,7 +87,6 @@ public class ScriptFinder : EditorWindow
     {
         m_CurrentTab = GUILayout.Toolbar(m_CurrentTab, new string[] { "Search", "Preferences"});
         EditorGUILayout.Space();
-        m_CurrentScrollPos = EditorGUILayout.BeginScrollView(m_CurrentScrollPos, GUILayout.Width(position.width), GUILayout.Height(position.height));
         switch (m_CurrentTab)
         {
             case 0:
@@ -88,7 +100,6 @@ public class ScriptFinder : EditorWindow
                     break;
                 }
         }
-        EditorGUILayout.EndScrollView();
     }
 
     private void OnLostFocus()
@@ -99,6 +110,8 @@ public class ScriptFinder : EditorWindow
 
     private void ShowSearchTab()
     {
+        m_CurrentScrollPos1 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos1, GUILayout.Width(position.width), GUILayout.Height(position.height));
+
         //Search bar
         EditorGUILayout.BeginHorizontal();
 
@@ -136,7 +149,7 @@ public class ScriptFinder : EditorWindow
                 GUILayout.Label(pair.Value, GUILayout.Height(30));
                 if (GUILayout.Button("Import", GUILayout.Width(60), GUILayout.Height(20)))
                 {
-                    ImportFile(pair.Key, pair.Value);
+                    ImportFile(pair.Value, pair.Key);
                 }
 
                 EditorGUILayout.EndHorizontal();
@@ -145,6 +158,8 @@ public class ScriptFinder : EditorWindow
 
         EditorGUI.indentLevel = oldIndent;
 
+
+        EditorGUILayout.EndScrollView();
 
         //Enter event
         if (Event.current != null && Event.current.isKey && Event.current.keyCode == KeyCode.Return)
@@ -155,6 +170,9 @@ public class ScriptFinder : EditorWindow
 
     private void ShowPreferencesTab()
     {
+        
+        m_CurrentScrollPos2 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos2, GUILayout.Width(position.width), GUILayout.Height(position.height));
+
         EditorGUILayout.LabelField("Local Paths");
         m_LocalPathsCount = EditorGUILayout.IntField(m_LocalPathsCount, GUILayout.Width(30f));
         for (int i = 0; i < Mathf.Abs(m_LocalPathsCount - m_LocalPaths.Count); i++)
@@ -193,9 +211,17 @@ public class ScriptFinder : EditorWindow
             m_RemotePaths[i] = EditorGUILayout.TextField(m_RemotePaths[i], GUILayout.Height(20));
         }
 
-        GUILayout.FlexibleSpace();
+        EditorGUILayout.Space();
+        EditorGUILayout.Space();
 
-        if (GUILayout.Button("Save"))
+        EditorGUILayout.LabelField("Default Import Folder: ");
+        m_DefaultImportFolder = EditorGUILayout.TextField(m_DefaultImportFolder, GUILayout.Height(20));
+
+        EditorGUILayout.Space();
+        EditorGUILayout.Space();
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("Save", GUILayout.Height(30)))
         {
             string localPathArray = "";
             for (int i = 0; i < m_LocalPaths.Count; i++)
@@ -203,7 +229,7 @@ public class ScriptFinder : EditorWindow
                 if (string.IsNullOrEmpty(m_LocalPaths[i])) continue;
                 localPathArray += m_LocalPaths[i] + "|";
             }
-            if(!string.IsNullOrEmpty(localPathArray))
+            if (!string.IsNullOrEmpty(localPathArray))
             {
                 localPathArray = localPathArray.Remove(localPathArray.Length - 1);
             }
@@ -221,15 +247,18 @@ public class ScriptFinder : EditorWindow
 
             EditorPrefs.SetString("ScriptFinderLocalPaths", localPathArray);
             EditorPrefs.SetString("ScriptFinderRemotePaths", remotePathArray);
+            EditorPrefs.SetString("ScriptFinderDefaultImportFolder", m_DefaultImportFolder);
         }
 
-        EditorGUILayout.Space();
-
-        if (GUILayout.Button("Reload"))
+        if (GUILayout.Button("Reload", GUILayout.Height(30)))
         {
             LoadData(true);
             Repaint();
         }
+        EditorGUILayout.EndHorizontal();
+
+        EditorGUILayout.EndScrollView();
+
     }
 
     private void Search()
@@ -242,7 +271,7 @@ public class ScriptFinder : EditorWindow
             string[] files = Directory.GetFiles(m_LocalPaths[i], $"*{m_SearchString}*.cs",SearchOption.AllDirectories);
             for (int j = 0; j < files.Length; j++)
             {
-                m_Results.Add(new KeyValuePair<string, string>(files[j], Path.GetFileName(files[j])));
+                m_Results.Add(new KeyValuePair<string, string>(Path.GetDirectoryName(files[j]), Path.GetFileName(files[j])));
             }
         }
 
@@ -253,20 +282,34 @@ public class ScriptFinder : EditorWindow
             string[] files = Directory.GetFiles(m_RemotePaths[i], $"*{m_SearchString}*.cs", SearchOption.AllDirectories);
             for (int j = 0; j < files.Length; j++)
             {
-                m_Results.Add(new KeyValuePair<string, string>(files[j], Path.GetFileName(files[j])));
+                m_Results.Add(new KeyValuePair<string, string>(Path.GetDirectoryName(files[j]), Path.GetFileName(files[j])));
             }
         }
 
         Repaint();
     }
 
-    private void ImportFile(string file, string newFileName)
+    private void ImportFile(string fileName, string directoryName)
     {
-        string folderToImport = Path.Combine(Directory.GetCurrentDirectory(), "Assets","Scripts");
+        string folderToImport = Path.Combine(Directory.GetCurrentDirectory(), "Assets",m_DefaultImportFolder);
         if (!Directory.Exists(folderToImport)) Directory.CreateDirectory(folderToImport);
-        File.Copy(file, Path.Combine(folderToImport, newFileName));
+        File.Copy(Path.Combine(directoryName,fileName), Path.Combine(folderToImport, fileName));
         AssetDatabase.Refresh();
+        //AssetDatabase.ImportAsset(GetRelativePath(fileName, directoryName));
+        //AssetDatabase.MoveAsset(file, Path.Combine(folderToImport, newFileName));
     }
+
+    //private string GetRelativePath(string filespec, string folder)
+    //{
+    //    Uri pathUri = new Uri(filespec);
+    //    // Folders must end in a slash
+    //    if (!folder.EndsWith(Path.DirectorySeparatorChar.ToString()))
+    //    {
+    //        folder += Path.DirectorySeparatorChar;
+    //    }
+    //    Uri folderUri = new Uri(folder);
+    //    return Uri.UnescapeDataString(folderUri.MakeRelativeUri(pathUri).ToString().Replace('/', Path.DirectorySeparatorChar));
+    //}
 
 }
 
