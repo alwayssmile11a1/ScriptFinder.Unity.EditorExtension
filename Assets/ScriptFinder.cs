@@ -263,7 +263,7 @@ public class ScriptFinder : EditorWindow
     private void ImportFile(string file)
     {
         string folderToImport = Path.Combine(Directory.GetCurrentDirectory(), "Assets","Scripts");
-        if (!Directory.Exists(folderToImport)) File.Create(folderToImport);
+        if (!Directory.Exists(folderToImport)) Directory.CreateDirectory(folderToImport);
         FileUtil.CopyFileOrDirectory(file, folderToImport);
     }
 
