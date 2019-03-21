@@ -1,417 +1,521 @@
-﻿using System;
+﻿using Octokit;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Networking;
 
-public class ScriptFinder : EditorWindow
+namespace CoheeCreative
 {
-    private static readonly string TITLE = "ScriptFinder";
-    private static readonly Vector2 m_MinSize = new Vector2(500, 250);
 
-    private static ScriptFinder Instance = null;
-    private string m_SearchString;
-    private static string m_DefaultImportFolder;
-    private static List<string> m_LocalPaths = new List<string>();
-    private static List<string> m_RemotePaths = new List<string>();
-    private static int m_LocalPathsCount;
-    private static int m_RemotePathsCount;
-    private bool m_Focused = false;
-    private int m_CurrentTab = 0;
-    private Vector2 m_CurrentScrollPos1;
-    private Vector2 m_CurrentScrollPos2;
-    private List<KeyValuePair<string, string>> m_Results = new List<KeyValuePair<string, string>>();
-
-    [MenuItem("Tools/ScriptFinder #t")]
-    public static void OpenWindow()
+    public class ScriptFinder : EditorWindow
     {
-        if (Instance != null)
+        private static readonly string TITLE = "ScriptFinder";
+        private static readonly Vector2 m_MinSize = new Vector2(500, 250);
+
+        private static ScriptFinder Instance = null;
+        private string m_SearchString;
+        private static string m_DefaultImportFolder;
+        private static List<string> m_LocalPaths = new List<string>();
+        private static List<string> m_RemotePaths = new List<string>();
+        private static int m_LocalPathsCount;
+        private static int m_RemotePathsCount;
+        private bool m_Focused = false;
+        private int m_CurrentTab = 0;
+        private Vector2 m_CurrentScrollPos1;
+        private Vector2 m_CurrentScrollPos2;
+        private List<KeyValuePair<string, string>> m_Results = new List<KeyValuePair<string, string>>();
+
+        [MenuItem("Tools/ScriptFinder #t")]
+        public static void OpenWindow()
         {
-            return;
+            if (Instance != null)
+            {
+                return;
+            }
+
+            Instance = EditorWindow.GetWindow<ScriptFinder>(true, TITLE, true);
+            LoadData();
+            Instance.minSize = m_MinSize;
+            Rect position = Instance.position;
+            position.center = new Vector2(Screen.currentResolution.width / 2f, Screen.currentResolution.height / 2f);
+            Instance.position = position;
+            Instance.Show();
+
         }
 
-        Instance = EditorWindow.GetWindow<ScriptFinder>(true, TITLE, true);
-        LoadData();
-        Instance.minSize = m_MinSize;
-        Rect position = Instance.position;
-        position.center = new Vector2(Screen.currentResolution.width / 2f, Screen.currentResolution.height / 2f);
-        Instance.position = position;
-        Instance.Show();
-
-    }
-
-    private static void LoadData(bool forceReload = false)
-    {
-
-        if (m_LocalPaths.Count == 0 && m_RemotePaths.Count == 0 || forceReload)
+        private static void LoadData(bool forceReload = false)
         {
-            m_LocalPaths.Clear();
-            m_RemotePaths.Clear();
-            m_RemotePathsCount = 0;
-            m_LocalPathsCount = 0;
 
-            string localPathArray = null;
-            string remotePathArray = null;
-
-            if (EditorPrefs.HasKey("ScriptFinderLocalPaths"))
+            if (m_LocalPaths.Count == 0 && m_RemotePaths.Count == 0 || forceReload)
             {
-                localPathArray = EditorPrefs.GetString("ScriptFinderLocalPaths");
-                string[] localPaths = localPathArray.Split('|').Where(x => !string.IsNullOrEmpty(x)).ToArray();
-                m_LocalPaths = new List<string>(localPaths);
-                m_LocalPathsCount = m_LocalPaths.Count;
-            }
+                m_LocalPaths.Clear();
+                m_RemotePaths.Clear();
+                m_RemotePathsCount = 0;
+                m_LocalPathsCount = 0;
 
-            if (EditorPrefs.HasKey("ScriptFinderRemotePaths"))
-            {
-                remotePathArray = EditorPrefs.GetString("ScriptFinderRemotePaths");
-                string[] remotePaths = remotePathArray.Split('|').Where(x => !string.IsNullOrEmpty(x)).ToArray();
-                m_RemotePaths = new List<string>(remotePaths);
-                m_RemotePathsCount = m_RemotePaths.Count;
-            }
+                string localPathArray = null;
+                string remotePathArray = null;
 
-            if (EditorPrefs.HasKey("ScriptFinderDefaultImportFolder"))
-            {
-                m_DefaultImportFolder = EditorPrefs.GetString("ScriptFinderDefaultImportFolder");
-            }
-            else
-            {
-                m_DefaultImportFolder = "Scripts";
-            }
-               
-        }
-    }
-
-    void OnGUI()
-    {
-        m_CurrentTab = GUILayout.Toolbar(m_CurrentTab, new string[] { "Search", "Preferences"});
-        EditorGUILayout.Space();
-        switch (m_CurrentTab)
-        {
-            case 0:
+                if (EditorPrefs.HasKey("ScriptFinderLocalPaths"))
                 {
-                    ShowSearchTab();
-                    break;
-                }
-            case 1:
-                {
-                    ShowPreferencesTab();
-                    break;
-                }
-        }
-    }
-
-    private void OnLostFocus()
-    {
-        Instance.Close();
-        m_Focused = false;
-    }
-
-    private void ShowSearchTab()
-    {
-        m_CurrentScrollPos1 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos1, GUILayout.Width(position.width), GUILayout.Height(position.height));
-
-        //Search bar
-        EditorGUILayout.BeginHorizontal();
-
-        GUI.SetNextControlName("textfield");
-
-        m_SearchString = EditorGUILayout.TextField(m_SearchString, GUILayout.Height(20));
-
-        if (!m_Focused)
-        {
-            EditorGUI.FocusTextInControl("textfield");
-            m_Focused = true;
-        }
-
-        if (GUILayout.Button("Search", GUILayout.Width(60), GUILayout.Height(20)))
-        {
-            Search();
-        }
-
-        EditorGUILayout.EndHorizontal();
-
-        EditorGUILayout.Space();
-        EditorGUILayout.Space();
-        EditorGUILayout.Space();
-
-        //Search Results
-        int oldIndent = EditorGUI.indentLevel;
-        EditorGUI.indentLevel = oldIndent + 10;
-
-        if (m_Results.Count > 0)
-        {
-            foreach (KeyValuePair<string, string> pair in m_Results)
-            {
-                EditorGUILayout.BeginHorizontal();
-
-                GUILayout.Label(pair.Value, GUILayout.Height(30));
-                if (GUILayout.Button("Import", GUILayout.Width(60), GUILayout.Height(20)))
-                {
-                    ImportFile(pair.Value, pair.Key);
+                    localPathArray = EditorPrefs.GetString("ScriptFinderLocalPaths");
+                    string[] localPaths = localPathArray.Split('|').Where(x => !string.IsNullOrEmpty(x)).ToArray();
+                    m_LocalPaths = new List<string>(localPaths);
+                    m_LocalPathsCount = m_LocalPaths.Count;
                 }
 
-                EditorGUILayout.EndHorizontal();
+                if (EditorPrefs.HasKey("ScriptFinderRemotePaths"))
+                {
+                    remotePathArray = EditorPrefs.GetString("ScriptFinderRemotePaths");
+                    string[] remotePaths = remotePathArray.Split('|').Where(x => !string.IsNullOrEmpty(x)).ToArray();
+                    m_RemotePaths = new List<string>(remotePaths);
+                    m_RemotePathsCount = m_RemotePaths.Count;
+                }
+
+                if (EditorPrefs.HasKey("ScriptFinderDefaultImportFolder"))
+                {
+                    m_DefaultImportFolder = EditorPrefs.GetString("ScriptFinderDefaultImportFolder");
+                }
+                else
+                {
+                    m_DefaultImportFolder = "Scripts";
+                }
+
             }
         }
 
-        EditorGUI.indentLevel = oldIndent;
-
-
-        EditorGUILayout.EndScrollView();
-
-        //Enter event
-        if (Event.current != null && Event.current.isKey && Event.current.keyCode == KeyCode.Return)
+        void OnGUI()
         {
-            Search();
-        }
-    }
-
-    private void ShowPreferencesTab()
-    {
-        
-        m_CurrentScrollPos2 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos2, GUILayout.Width(position.width), GUILayout.Height(position.height));
-
-        EditorGUILayout.LabelField("Local Paths");
-        m_LocalPathsCount = EditorGUILayout.IntField(m_LocalPathsCount, GUILayout.Width(30f));
-        for (int i = 0; i < Mathf.Abs(m_LocalPathsCount - m_LocalPaths.Count); i++)
-        {
-            if (m_LocalPathsCount > m_LocalPaths.Count)
+            m_CurrentTab = GUILayout.Toolbar(m_CurrentTab, new string[] { "Search", "Preferences" });
+            EditorGUILayout.Space();
+            switch (m_CurrentTab)
             {
-                m_LocalPaths.Add("");
+                case 0:
+                    {
+                        ShowSearchTab();
+                        break;
+                    }
+                case 1:
+                    {
+                        ShowPreferencesTab();
+                        break;
+                    }
             }
-            else
+
+            //Enter event
+            if (Event.current != null && Event.current.isKey && Event.current.keyCode == KeyCode.Escape)
             {
-                m_LocalPaths.RemoveAt(m_LocalPaths.Count - 1);
+                Quit();
             }
-        }
-        for (int i = 0; i < m_LocalPaths.Count; i++)
-        {
-            m_LocalPaths[i] = EditorGUILayout.TextField(m_LocalPaths[i], GUILayout.Height(20));
+
         }
 
-        EditorGUILayout.Space();
-
-        EditorGUILayout.LabelField("Remote Paths");
-        m_RemotePathsCount = EditorGUILayout.IntField(m_RemotePathsCount, GUILayout.Width(30f));
-        for (int i = 0; i < Mathf.Abs(m_RemotePathsCount - m_RemotePaths.Count); i++)
+        private void OnLostFocus()
         {
-            if (m_RemotePathsCount > m_RemotePaths.Count)
+            Quit();
+        }
+
+        private void Quit()
+        {
+            Instance.Close();
+            Instance = null;
+            m_Focused = false;
+        }
+
+        private void ShowSearchTab()
+        {
+            m_CurrentScrollPos1 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos1, GUILayout.Width(position.width), GUILayout.Height(position.height));
+
+            //Search bar
+            EditorGUILayout.BeginHorizontal();
+
+            GUI.SetNextControlName("textfield");
+
+            m_SearchString = EditorGUILayout.TextField(m_SearchString, GUILayout.Height(20));
+
+            if (!m_Focused)
             {
-                m_RemotePaths.Add("");
+                EditorGUI.FocusTextInControl("textfield");
+                m_Focused = true;
             }
-            else
+
+            if (GUILayout.Button("Search", GUILayout.Width(60), GUILayout.Height(20)))
             {
-                m_RemotePaths.RemoveAt(m_RemotePaths.Count - 1);
+                Search();
+            }
+
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
+
+            //Search Results
+            int oldIndent = EditorGUI.indentLevel;
+            EditorGUI.indentLevel = oldIndent + 10;
+
+            if (m_Results.Count > 0)
+            {
+                foreach (KeyValuePair<string, string> pair in m_Results)
+                {
+                    EditorGUILayout.BeginHorizontal();
+
+                    GUILayout.Label(pair.Value, GUILayout.Height(30));
+                    GUILayout.Label(pair.Key, GUILayout.Height(30));
+                    if (GUILayout.Button("Import", GUILayout.Width(60), GUILayout.Height(20)))
+                    {
+                        ImportFile(pair.Value, pair.Key);
+                    }
+
+                    EditorGUILayout.EndHorizontal();
+                }
+            }
+
+            EditorGUI.indentLevel = oldIndent;
+
+
+            EditorGUILayout.EndScrollView();
+
+            //Enter event
+            if (Event.current != null && Event.current.isKey && Event.current.keyCode == KeyCode.Return)
+            {
+                Search();
             }
         }
-        for (int i = 0; i < m_RemotePaths.Count; i++)
+
+        private void ShowPreferencesTab()
         {
-            m_RemotePaths[i] = EditorGUILayout.TextField(m_RemotePaths[i], GUILayout.Height(20));
-        }
 
-        EditorGUILayout.Space();
-        EditorGUILayout.Space();
+            m_CurrentScrollPos2 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos2, GUILayout.Width(position.width), GUILayout.Height(position.height));
 
-        EditorGUILayout.LabelField("Default Import Folder: ");
-        m_DefaultImportFolder = EditorGUILayout.TextField(m_DefaultImportFolder, GUILayout.Height(20));
-
-        EditorGUILayout.Space();
-        EditorGUILayout.Space();
-
-        EditorGUILayout.BeginHorizontal();
-        if (GUILayout.Button("Save", GUILayout.Height(30)))
-        {
-            string localPathArray = "";
+            EditorGUILayout.LabelField("Local Paths");
+            m_LocalPathsCount = EditorGUILayout.IntField(m_LocalPathsCount, GUILayout.Width(30f));
+            for (int i = 0; i < Mathf.Abs(m_LocalPathsCount - m_LocalPaths.Count); i++)
+            {
+                if (m_LocalPathsCount > m_LocalPaths.Count)
+                {
+                    m_LocalPaths.Add("");
+                }
+                else
+                {
+                    m_LocalPaths.RemoveAt(m_LocalPaths.Count - 1);
+                }
+            }
             for (int i = 0; i < m_LocalPaths.Count; i++)
             {
-                if (string.IsNullOrEmpty(m_LocalPaths[i])) continue;
-                localPathArray += m_LocalPaths[i] + "|";
-            }
-            if (!string.IsNullOrEmpty(localPathArray))
-            {
-                localPathArray = localPathArray.Remove(localPathArray.Length - 1);
+                m_LocalPaths[i] = EditorGUILayout.TextField(m_LocalPaths[i], GUILayout.Height(20));
             }
 
-            string remotePathArray = "";
+            EditorGUILayout.Space();
+
+            EditorGUILayout.LabelField("Remote Paths");
+            m_RemotePathsCount = EditorGUILayout.IntField(m_RemotePathsCount, GUILayout.Width(30f));
+            for (int i = 0; i < Mathf.Abs(m_RemotePathsCount - m_RemotePaths.Count); i++)
+            {
+                if (m_RemotePathsCount > m_RemotePaths.Count)
+                {
+                    m_RemotePaths.Add("");
+                }
+                else
+                {
+                    m_RemotePaths.RemoveAt(m_RemotePaths.Count - 1);
+                }
+            }
             for (int i = 0; i < m_RemotePaths.Count; i++)
             {
-                if (string.IsNullOrEmpty(m_RemotePaths[i])) continue;
-                remotePathArray += m_RemotePaths[i] + "|";
-            }
-            if (!string.IsNullOrEmpty(remotePathArray))
-            {
-                remotePathArray = remotePathArray.Remove(remotePathArray.Length - 1);
+                m_RemotePaths[i] = EditorGUILayout.TextField(m_RemotePaths[i], GUILayout.Height(20));
             }
 
-            EditorPrefs.SetString("ScriptFinderLocalPaths", localPathArray);
-            EditorPrefs.SetString("ScriptFinderRemotePaths", remotePathArray);
-            EditorPrefs.SetString("ScriptFinderDefaultImportFolder", m_DefaultImportFolder);
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
+
+            EditorGUILayout.LabelField("Default Import Folder: ");
+            m_DefaultImportFolder = EditorGUILayout.TextField(m_DefaultImportFolder, GUILayout.Height(20));
+
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Save", GUILayout.Height(30)))
+            {
+                string localPathArray = "";
+                for (int i = 0; i < m_LocalPaths.Count; i++)
+                {
+                    if (string.IsNullOrEmpty(m_LocalPaths[i])) continue;
+                    localPathArray += m_LocalPaths[i] + "|";
+                }
+                if (!string.IsNullOrEmpty(localPathArray))
+                {
+                    localPathArray = localPathArray.Remove(localPathArray.Length - 1);
+                }
+
+                string remotePathArray = "";
+                for (int i = 0; i < m_RemotePaths.Count; i++)
+                {
+                    if (string.IsNullOrEmpty(m_RemotePaths[i])) continue;
+                    remotePathArray += m_RemotePaths[i] + "|";
+                }
+                if (!string.IsNullOrEmpty(remotePathArray))
+                {
+                    remotePathArray = remotePathArray.Remove(remotePathArray.Length - 1);
+                }
+
+                EditorPrefs.SetString("ScriptFinderLocalPaths", localPathArray);
+                EditorPrefs.SetString("ScriptFinderRemotePaths", remotePathArray);
+                EditorPrefs.SetString("ScriptFinderDefaultImportFolder", m_DefaultImportFolder);
+            }
+
+            if (GUILayout.Button("Reload", GUILayout.Height(30)))
+            {
+                LoadData(true);
+                Repaint();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.EndScrollView();
+
         }
 
-        if (GUILayout.Button("Reload", GUILayout.Height(30)))
+        private void Search()
         {
-            LoadData(true);
+            m_Results.Clear();
+            //Local
+            for (int i = 0; i < m_LocalPaths.Count; i++)
+            {
+                if (!Directory.Exists(m_LocalPaths[i])) continue;
+                string[] files = Directory.GetFiles(m_LocalPaths[i], $"*{m_SearchString}*.cs", SearchOption.AllDirectories);
+                for (int j = 0; j < files.Length; j++)
+                {
+                    m_Results.Add(new KeyValuePair<string, string>(files[j], Path.GetFileName(files[j])));
+                }
+            }
+
+            //Remote
+            for (int i = 0; i < m_RemotePaths.Count; i++)
+            {
+                GetRemoteFiles(m_RemotePaths[i]);
+                //if (!Directory.Exists(m_RemotePaths[i])) continue;
+                //string[] files = Directory.GetFiles(m_RemotePaths[i], $"*{m_SearchString}*.cs", SearchOption.AllDirectories);
+                //for (int j = 0; j < files.Length; j++)
+                //{
+                //    m_Results.Add(new KeyValuePair<string, string>(files[j], Path.GetFileName(files[j])));
+                //}
+            }
+
             Repaint();
         }
-        EditorGUILayout.EndHorizontal();
 
-        EditorGUILayout.EndScrollView();
+        //private IEnumerator GetRemoteFiles(string url)
+        //{
+        //    using (UnityWebRequest www = UnityWebRequest.Get(url))
+        //    {
+        //        yield return www.SendWebRequest();
+        //        if (www.isNetworkError || www.isHttpError)
+        //        {
+        //            Debug.LogWarning(www.error);
+        //        }
+        //        else
+        //        {
+        //            string result = www.downloadHandler.text;
+        //            Debug.Log(result);
 
-    }
+        //        }
+        //    }
+        //}
 
-    private void Search()
-    {
-        m_Results.Clear();
-        //Local
-        for (int i = 0; i < m_LocalPaths.Count; i++)
+        private void GetRemoteFiles(string url)
         {
-            if (!Directory.Exists(m_LocalPaths[i])) continue;
-            string[] files = Directory.GetFiles(m_LocalPaths[i], $"*{m_SearchString}*.cs",SearchOption.AllDirectories);
-            for (int j = 0; j < files.Length; j++)
+            Task.Factory.StartNew(async () =>
             {
-                m_Results.Add(new KeyValuePair<string, string>(Path.GetDirectoryName(files[j]), Path.GetFileName(files[j])));
+                var repoOwner = "crs2007";
+                var repoName = "ActiveReport";
+                var path = "ActiveReport";
+
+                var octokitResults = await ListContentsOctokit(repoOwner, repoName, path);
+                PrintResults("From Octokit", octokitResults);
+
+            }).Wait();
+        }
+
+        static async Task<IEnumerable<string>> ListContentsOctokit(string repoOwner, string repoName, string path)
+        {
+            var client = new GitHubClient(new ProductHeaderValue("Cohee-Creative"));
+            //var basicAuth = new Credentials("username", "password");
+            //client.Credentials = basicAuth;
+            var contents = await client.Repository.Content.GetAllContents(repoOwner, repoName);
+            return contents.Select(content => content.Name);
+        }
+
+        static void PrintResults(string source, IEnumerable<string> files)
+        {
+            Debug.Log(source);
+            foreach (var file in files)
+            {
+                Debug.Log($" -{file}");
             }
         }
 
-        //Remote
-        for (int i = 0; i < m_RemotePaths.Count; i++)
+        private void ImportFile(string fileName, string fullPath)
         {
-            if (!Directory.Exists(m_LocalPaths[i])) continue;
-            string[] files = Directory.GetFiles(m_RemotePaths[i], $"*{m_SearchString}*.cs", SearchOption.AllDirectories);
-            for (int j = 0; j < files.Length; j++)
-            {
-                m_Results.Add(new KeyValuePair<string, string>(Path.GetDirectoryName(files[j]), Path.GetFileName(files[j])));
-            }
+            string folderToImport = Path.Combine(Directory.GetCurrentDirectory(), "Assets", m_DefaultImportFolder);
+            if (!Directory.Exists(folderToImport)) AssetDatabase.CreateFolder("Assets", m_DefaultImportFolder);
+            File.Copy(fullPath, Path.Combine(folderToImport, fileName));
+            AssetDatabase.ImportAsset(Path.Combine("Assets", m_DefaultImportFolder, fileName));
         }
-
-        Repaint();
     }
 
-    private void ImportFile(string fileName, string directoryName)
+    /// <summary>
+    /// Gives the possibility to use coroutines in editorscripts.
+    /// from https://github.com/FelixEngl/EditorCoroutines/blob/master/Editor/EditorCoroutine.cs
+    /// </summary>
+    public class EditorCoroutine
     {
-        string folderToImport = Path.Combine(Directory.GetCurrentDirectory(), "Assets",m_DefaultImportFolder);
-        if (!Directory.Exists(folderToImport)) Directory.CreateDirectory(folderToImport);
-        File.Copy(Path.Combine(directoryName,fileName), Path.Combine(folderToImport, fileName));
-        AssetDatabase.Refresh();
-        //AssetDatabase.ImportAsset(GetRelativePath(fileName, directoryName));
-        //AssetDatabase.MoveAsset(file, Path.Combine(folderToImport, newFileName));
-    }
 
-    //private string GetRelativePath(string filespec, string folder)
-    //{
-    //    Uri pathUri = new Uri(filespec);
-    //    // Folders must end in a slash
-    //    if (!folder.EndsWith(Path.DirectorySeparatorChar.ToString()))
-    //    {
-    //        folder += Path.DirectorySeparatorChar;
-    //    }
-    //    Uri folderUri = new Uri(folder);
-    //    return Uri.UnescapeDataString(folderUri.MakeRelativeUri(pathUri).ToString().Replace('/', Path.DirectorySeparatorChar));
-    //}
-
-}
-
-//  Copyright (c) 2016-2017 amlovey
-public class QuickOpener : Editor
-{
-    [MenuItem("Tools/Quick Folder Opener/Application.dataPath", false, 100)]
-    private static void OpenDataPath()
-    {
-        Reveal(Application.dataPath);
-    }
-
-    [MenuItem("Tools/Quick Folder Opener/Application.persistentDataPath", false, 100)]
-    private static void OpenPersistentDataPath()
-    {
-        Reveal(Application.persistentDataPath);
-    }
-
-    [MenuItem("Tools/Quick Folder Opener/Application.streamingAssetsPath", false, 100)]
-    private static void OpenStreamingAssets()
-    {
-        Reveal(Application.streamingAssetsPath);
-    }
-
-    [MenuItem("Tools/Quick Folder Opener/Application.temporaryCachePath", false, 100)]
-    private static void OpenCachePath()
-    {
-        Reveal(Application.temporaryCachePath);
-    }
-
-    // http://docs.unity3d.com/ScriptReference/MenuItem-ctor.html
-    //
-    [MenuItem("Tools/Quick Folder Opener/Asset Store Packages Folder", false, 111)]
-    private static void OpenAssetStorePackagesFolder()
-    {
-        //http://answers.unity3d.com/questions/45050/where-unity-store-saves-the-packages.html
+        //The given coroutine
         //
-#if UNITY_EDITOR_OSX
-            string path = GetAssetStorePackagesPathOnMac();
-#elif UNITY_EDITOR_WIN
-        string path = GetAssetStorePackagesPathOnWindows();
-#endif
+        readonly IEnumerator routine;
 
-        Reveal(path);
-    }
+        //The subroutine of the given coroutine
+        private IEnumerator internalRoutine;
 
-    [MenuItem("Tools/Quick Folder Opener/Editor Application Path")]
-    private static void OpenUnityEditorPath()
-    {
-        Reveal(new FileInfo(EditorApplication.applicationPath).Directory.FullName);
-    }
-
-    [MenuItem("Tools/Quick Folder Opener/Editor Log Folder")]
-    private static void OpenEditorLogFolderPath()
-    {
-#if UNITY_EDITOR_OSX
-			string rootFolderPath = System.Environment.GetFolderPath(System.Environment.SpecialFolder.Personal);
-			var libraryPath = Path.Combine(rootFolderPath, "Library");
-			var logsFolder = Path.Combine(libraryPath, "Logs"); 
-			var UnityFolder = Path.Combine(logsFolder, "Unity");
-			Reveal(UnityFolder);
-#elif UNITY_EDITOR_WIN
-        var rootFolderPath = System.Environment.ExpandEnvironmentVariables("%localappdata%");
-        var unityFolder = Path.Combine(rootFolderPath, "Unity");
-        Reveal(Path.Combine(unityFolder, "Editor"));
-#endif
-    }
-
-    [MenuItem("Tools/Quick Folder Opener/Asset Backup Folder", false, 122)]
-    public static void OpenAEBackupFolder()
-    {
-        var folder = Path.Combine(Application.persistentDataPath, "AEBackup");
-        Directory.CreateDirectory(folder);
-        Reveal(folder);
-    }
-
-    private const string ASSET_STORE_FOLDER_NAME = "Asset Store-5.x";
-    private static string GetAssetStorePackagesPathOnMac()
-    {
-        var rootFolderPath = System.Environment.GetFolderPath(System.Environment.SpecialFolder.Personal);
-        var libraryPath = Path.Combine(rootFolderPath, "Library");
-        var unityFolder = Path.Combine(libraryPath, "Unity");
-        return Path.Combine(unityFolder, ASSET_STORE_FOLDER_NAME);
-    }
-
-    private static string GetAssetStorePackagesPathOnWindows()
-    {
-        var rootFolderPath = System.Environment.ExpandEnvironmentVariables("%appdata%");
-        var unityFolder = Path.Combine(rootFolderPath, "Unity");
-        return Path.Combine(unityFolder, ASSET_STORE_FOLDER_NAME);
-    }
-
-    public static void Reveal(string folderPath)
-    {
-        if (!Directory.Exists(folderPath))
+        //Constructor
+        EditorCoroutine(IEnumerator routine)
         {
-            Debug.LogWarning(string.Format("Folder '{0}' is not Exists", folderPath));
-            return;
+            this.routine = routine;
         }
 
-        EditorUtility.RevealInFinder(folderPath);
-    }
-}
 
+        #region static functions
+        /// <summary>
+        /// Starts a new EditorCoroutine.
+        /// </summary>
+        /// <param name="routine">Coroutine</param>
+        /// <returns>new EditorCoroutine</returns>
+        public static EditorCoroutine StartCoroutine(IEnumerator routine)
+        {
+            EditorCoroutine coroutine = new EditorCoroutine(routine);
+            coroutine.Start();
+            return coroutine;
+        }
+
+        /// <summary>
+        /// Clears the EditorApplication.update delegate by setting it null
+        /// </summary>
+        public static void ClearEditorUpdate()
+        {
+            EditorApplication.update = null;
+        }
+
+        #endregion
+
+
+
+        //Delegate to EditorUpdate
+        void Start()
+        {
+            EditorApplication.update += Update;
+        }
+
+        //Undelegate
+        public void Stop()
+        {
+            if (EditorApplication.update != null)
+                EditorApplication.update -= Update;
+
+        }
+
+        //Updatefunction
+        void Update()
+        {
+
+            //if the internal routine is null
+            if (internalRoutine == null)
+            {
+                //if given routine doesn't continue
+                if (!routine.MoveNext())
+                {
+                    Stop();
+                }
+            }
+
+            if (internalRoutine != null)
+            {
+                if (!internalRoutine.MoveNext())
+                {
+                    internalRoutine = null;
+                }
+                if (internalRoutine.Current != null && (bool)internalRoutine.Current)
+                {
+                    internalRoutine = null;
+                }
+            }
+        }
+
+        ////IEnumerator for a EditorYieldInstruction, false if EditorYieldInstruction is false, else true and leaving
+        //private IEnumerator isTrue(EditorYieldInstruction editorYieldInstruction)
+        //{
+        //    while (!editorYieldInstruction.IsDone)
+        //    {
+        //        yield return false;
+        //    }
+        //    yield return true;
+        //}
+    }
+
+    ///// <summary>
+    ///// Abstract Class for a EditorYieldInstruction.
+    ///// Be careful with the abstract function: <see cref="InternalLogic"/>
+    ///// </summary>
+    //public abstract class EditorYieldInstruction
+    //{
+    //    //EditorYieldInstruction done?
+    //    private bool isDone = false;
+
+    //    //internal logik routine of the EditorYieldInstruction
+    //    readonly IEnumerator routine;
+
+    //    /// <summary>
+    //    /// Updates the EditorYieldInstruction and returns it's state. True if done.
+    //    /// </summary>
+    //    internal bool IsDone
+    //    {
+    //        get { Update(); return isDone; }
+    //    }
+
+
+    //    //basic constructor
+    //    protected internal EditorYieldInstruction()
+    //    {
+    //        routine = InternalLogic();
+    //    }
+
+    //    //internal updatefunction, called with readonly
+    //    protected internal void Update()
+    //    {
+    //        if (routine != null)
+    //        {
+    //            if (routine.MoveNext())
+    //            {
+    //                if (routine.Current != null)
+    //                    isDone = (bool)routine.Current;
+    //            }
+
+    //        }
+    //    }
+
+    //    /// <summary>
+    //    /// Internal logic routine of the EditorYieldInstruction.
+    //    /// yield return false when not finished
+    //    /// yield return true when finished.
+    //    /// </summary>
+    //    /// <returns>IEnumerator with true for done and false for not done</returns>
+    //    protected internal abstract IEnumerator InternalLogic();
+    //}
+}
 
