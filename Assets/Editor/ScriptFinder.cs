@@ -1,14 +1,11 @@
 ﻿using Octokit;
-using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.Networking;
 
 namespace CoheeCreative
 {
@@ -17,6 +14,7 @@ namespace CoheeCreative
     {
         private static readonly string TITLE = "ScriptFinder";
         private static readonly Vector2 m_MinSize = new Vector2(500, 250);
+        private static readonly float m_Timeout = 5f;
 
         private static ScriptFinder Instance = null;
         private string m_SearchString;
@@ -29,7 +27,9 @@ namespace CoheeCreative
         private int m_CurrentTab = 0;
         private Vector2 m_CurrentScrollPos1;
         private Vector2 m_CurrentScrollPos2;
-        private List<KeyValuePair<string, string>> m_Results = new List<KeyValuePair<string, string>>();
+        private static string m_UserName;
+        private static string m_Password;
+        private List<string> m_Results = new List<string>();
 
         [MenuItem("Tools/ScriptFinder #t")]
         public static void OpenWindow()
@@ -87,6 +87,11 @@ namespace CoheeCreative
                     m_DefaultImportFolder = "Scripts";
                 }
 
+                if (EditorPrefs.HasKey("ScriptFinderUsername"))
+                {
+                    m_UserName = EditorPrefs.GetString("ScriptFinderUsername");
+                }
+
             }
         }
 
@@ -116,6 +121,12 @@ namespace CoheeCreative
 
         }
 
+        public void OnInspectorUpdate()
+        {
+            // This will only get called 10 times per second.
+            Repaint();
+        }
+
         private void OnLostFocus()
         {
             Quit();
@@ -123,63 +134,49 @@ namespace CoheeCreative
 
         private void Quit()
         {
-            Instance.Close();
+            if (Instance != null) Instance.Close();
             Instance = null;
             m_Focused = false;
         }
 
         private void ShowSearchTab()
         {
-            m_CurrentScrollPos1 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos1, GUILayout.Width(position.width), GUILayout.Height(position.height));
-
             //Search bar
             EditorGUILayout.BeginHorizontal();
-
             GUI.SetNextControlName("textfield");
-
             m_SearchString = EditorGUILayout.TextField(m_SearchString, GUILayout.Height(20));
-
             if (!m_Focused)
             {
                 EditorGUI.FocusTextInControl("textfield");
                 m_Focused = true;
             }
-
             if (GUILayout.Button("Search", GUILayout.Width(60), GUILayout.Height(20)))
             {
                 Search();
             }
-
             EditorGUILayout.EndHorizontal();
 
-            EditorGUILayout.Space();
-            EditorGUILayout.Space();
-            EditorGUILayout.Space();
+            m_CurrentScrollPos1 = EditorGUILayout.BeginScrollView(m_CurrentScrollPos1, GUILayout.Width(position.width), GUILayout.Height(position.height - 50));
 
-            //Search Results
-            int oldIndent = EditorGUI.indentLevel;
-            EditorGUI.indentLevel = oldIndent + 10;
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
 
             if (m_Results.Count > 0)
             {
-                foreach (KeyValuePair<string, string> pair in m_Results)
+                foreach (string item in m_Results)
                 {
                     EditorGUILayout.BeginHorizontal();
-
-                    GUILayout.Label(pair.Value, GUILayout.Height(30));
-                    GUILayout.Label(pair.Key, GUILayout.Height(30));
+                    string name = Path.GetFileName(item);
+                    EditorGUILayout.SelectableLabel(name, GUILayout.Height(30), GUILayout.Width(250));
+                    EditorGUILayout.SelectableLabel(item, GUILayout.Height(30));
                     if (GUILayout.Button("Import", GUILayout.Width(60), GUILayout.Height(20)))
                     {
-                        ImportFile(pair.Value, pair.Key);
+                        ImportFile(name, item);
                     }
 
                     EditorGUILayout.EndHorizontal();
                 }
             }
-
-            EditorGUI.indentLevel = oldIndent;
-
-
             EditorGUILayout.EndScrollView();
 
             //Enter event
@@ -214,7 +211,7 @@ namespace CoheeCreative
 
             EditorGUILayout.Space();
 
-            EditorGUILayout.LabelField("Remote Paths");
+            EditorGUILayout.LabelField("Github Remote Paths");
             m_RemotePathsCount = EditorGUILayout.IntField(m_RemotePathsCount, GUILayout.Width(30f));
             for (int i = 0; i < Mathf.Abs(m_RemotePathsCount - m_RemotePaths.Count); i++)
             {
@@ -237,6 +234,16 @@ namespace CoheeCreative
 
             EditorGUILayout.LabelField("Default Import Folder: ");
             m_DefaultImportFolder = EditorGUILayout.TextField(m_DefaultImportFolder, GUILayout.Height(20));
+
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
+
+            EditorGUILayout.LabelField("Github account: (Left blank if you don't want to use Github account)");
+            m_UserName = EditorGUILayout.TextField(m_UserName, GUILayout.Height(20));
+            m_Password = EditorGUILayout.PasswordField(m_Password, GUILayout.Height(20));
+            EditorGUILayout.LabelField("When authenticated, you have access to private repositories and 5000 requests per hour instead of 60. So this is the recommended approach for interacting with the API");
+            EditorGUILayout.SelectableLabel("Detail: https://developer.github.com/v3/#rate-limiting");
+            EditorGUILayout.LabelField("Note: For security purpose, password would not be saved locally");
 
             EditorGUILayout.Space();
             EditorGUILayout.Space();
@@ -269,6 +276,7 @@ namespace CoheeCreative
                 EditorPrefs.SetString("ScriptFinderLocalPaths", localPathArray);
                 EditorPrefs.SetString("ScriptFinderRemotePaths", remotePathArray);
                 EditorPrefs.SetString("ScriptFinderDefaultImportFolder", m_DefaultImportFolder);
+                EditorPrefs.SetString("ScriptFinderUsername", m_UserName);
             }
 
             if (GUILayout.Button("Reload", GUILayout.Height(30)))
@@ -277,6 +285,9 @@ namespace CoheeCreative
                 Repaint();
             }
             EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space();
+            EditorGUILayout.Space();
 
             EditorGUILayout.EndScrollView();
 
@@ -292,73 +303,80 @@ namespace CoheeCreative
                 string[] files = Directory.GetFiles(m_LocalPaths[i], $"*{m_SearchString}*.cs", SearchOption.AllDirectories);
                 for (int j = 0; j < files.Length; j++)
                 {
-                    m_Results.Add(new KeyValuePair<string, string>(files[j], Path.GetFileName(files[j])));
+                    m_Results.Add(files[j]);
                 }
             }
 
             //Remote
             for (int i = 0; i < m_RemotePaths.Count; i++)
             {
-                GetRemoteFiles(m_RemotePaths[i]);
-                //if (!Directory.Exists(m_RemotePaths[i])) continue;
-                //string[] files = Directory.GetFiles(m_RemotePaths[i], $"*{m_SearchString}*.cs", SearchOption.AllDirectories);
-                //for (int j = 0; j < files.Length; j++)
-                //{
-                //    m_Results.Add(new KeyValuePair<string, string>(files[j], Path.GetFileName(files[j])));
-                //}
+                GetRemoteFiles(m_RemotePaths[i], m_SearchString);
             }
 
             Repaint();
         }
 
-        //private IEnumerator GetRemoteFiles(string url)
-        //{
-        //    using (UnityWebRequest www = UnityWebRequest.Get(url))
-        //    {
-        //        yield return www.SendWebRequest();
-        //        if (www.isNetworkError || www.isHttpError)
-        //        {
-        //            Debug.LogWarning(www.error);
-        //        }
-        //        else
-        //        {
-        //            string result = www.downloadHandler.text;
-        //            Debug.Log(result);
-
-        //        }
-        //    }
-        //}
-
-        private void GetRemoteFiles(string url)
+        private void GetRemoteFiles(string url, string searchTerm)
         {
             Task.Factory.StartNew(async () =>
             {
-                var repoOwner = "crs2007";
-                var repoName = "ActiveReport";
-                var path = "ActiveReport";
+                int repoNameStartIndex = url.LastIndexOf('/') + 1;
+                var repoName = url.Substring(repoNameStartIndex);
 
-                var octokitResults = await ListContentsOctokit(repoOwner, repoName, path);
-                PrintResults("From Octokit", octokitResults);
+                var repoOwner = url.Substring(0, repoNameStartIndex - 1);
+                repoOwner = repoOwner.Substring(repoOwner.LastIndexOf('/') + 1);
+                var octokitResults = await ListContentsOctokit(searchTerm, repoOwner, repoName, url);
+                m_Results.AddRange(octokitResults);
+
+                Repaint();
 
             }).Wait();
         }
 
-        static async Task<IEnumerable<string>> ListContentsOctokit(string repoOwner, string repoName, string path)
+        async Task<IEnumerable<string>> ListContentsOctokit(string searchTerm, string repoOwner, string repoName, string url)
         {
             var client = new GitHubClient(new ProductHeaderValue("Cohee-Creative"));
-            //var basicAuth = new Credentials("username", "password");
-            //client.Credentials = basicAuth;
-            var contents = await client.Repository.Content.GetAllContents(repoOwner, repoName);
-            return contents.Select(content => content.Name);
+
+            EditorCoroutine currentCoroutine = EditorCoroutine.StartCoroutine(CheckTimeOut());
+
+            if (!string.IsNullOrEmpty(m_UserName))
+            {
+                var basicAuth = new Credentials(m_UserName, m_Password);
+                client.Credentials = basicAuth;
+            }
+
+            var request = new SearchCodeRequest(searchTerm, repoOwner, repoName)
+            {
+                // we can restrict search to the file, path or search both
+                In = new[] { CodeInQualifier.Path },
+
+                // how about we find a file based on a certain language
+                Language = Language.CSharp,
+
+                // we may want to restrict the file based on file extension
+                Extension = "cs",
+
+
+            };
+
+            var task = await client.Search.SearchCode(request);
+            currentCoroutine.Stop();
+            return task.Items.Select(content => url + content.Path);
+
         }
 
-        static void PrintResults(string source, IEnumerable<string> files)
+        private IEnumerator CheckTimeOut()
         {
-            Debug.Log(source);
-            foreach (var file in files)
+            //Since waitforsecond doesn't work, we have to do this
+            int iteration = (int)(m_Timeout / (1 / 60f));
+            for (int i = 0; i < iteration; i++)
             {
-                Debug.Log($" -{file}");
+                yield return null;
             }
+
+            //Timeout 
+            Debug.LogWarning("ScriptFinder: Github request timeout!! Consider checking username, password (if using) and remote paths.");
+
         }
 
         private void ImportFile(string fileName, string fullPath)
@@ -456,66 +474,7 @@ namespace CoheeCreative
                 }
             }
         }
-
-        ////IEnumerator for a EditorYieldInstruction, false if EditorYieldInstruction is false, else true and leaving
-        //private IEnumerator isTrue(EditorYieldInstruction editorYieldInstruction)
-        //{
-        //    while (!editorYieldInstruction.IsDone)
-        //    {
-        //        yield return false;
-        //    }
-        //    yield return true;
-        //}
     }
 
-    ///// <summary>
-    ///// Abstract Class for a EditorYieldInstruction.
-    ///// Be careful with the abstract function: <see cref="InternalLogic"/>
-    ///// </summary>
-    //public abstract class EditorYieldInstruction
-    //{
-    //    //EditorYieldInstruction done?
-    //    private bool isDone = false;
-
-    //    //internal logik routine of the EditorYieldInstruction
-    //    readonly IEnumerator routine;
-
-    //    /// <summary>
-    //    /// Updates the EditorYieldInstruction and returns it's state. True if done.
-    //    /// </summary>
-    //    internal bool IsDone
-    //    {
-    //        get { Update(); return isDone; }
-    //    }
-
-
-    //    //basic constructor
-    //    protected internal EditorYieldInstruction()
-    //    {
-    //        routine = InternalLogic();
-    //    }
-
-    //    //internal updatefunction, called with readonly
-    //    protected internal void Update()
-    //    {
-    //        if (routine != null)
-    //        {
-    //            if (routine.MoveNext())
-    //            {
-    //                if (routine.Current != null)
-    //                    isDone = (bool)routine.Current;
-    //            }
-
-    //        }
-    //    }
-
-    //    /// <summary>
-    //    /// Internal logic routine of the EditorYieldInstruction.
-    //    /// yield return false when not finished
-    //    /// yield return true when finished.
-    //    /// </summary>
-    //    /// <returns>IEnumerator with true for done and false for not done</returns>
-    //    protected internal abstract IEnumerator InternalLogic();
-    //}
 }
 
