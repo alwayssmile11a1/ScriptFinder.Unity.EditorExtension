@@ -22,19 +22,20 @@ namespace CoheeCreative
         private static readonly float m_Timeout = 5f;
 
         private static ScriptFinder Instance = null;
-        private string m_SearchString;
+        private static string m_SearchString;
         private static string m_DefaultImportFolder;
         private static List<string> m_LocalPaths = new List<string>();
         private static List<string> m_RemotePaths = new List<string>();
         private static int m_LocalPathsCount;
         private static int m_RemotePathsCount;
-        private bool m_Focused = false;
-        private int m_CurrentTab = 0;
-        private Vector2 m_CurrentScrollPos1;
-        private Vector2 m_CurrentScrollPos2;
+        private static bool m_Focused = false;
         private static string m_UserName;
         private static string m_Password;
-        private List<string> m_Results = new List<string>();
+        private static List<string> m_Results = new List<string>();
+
+        private static int m_CurrentTab = 0;
+        private static Vector2 m_CurrentScrollPos1;
+        private static Vector2 m_CurrentScrollPos2;
 
         [MenuItem("Tools/ScriptFinder #t")]
         public static void OpenWindow()
@@ -81,6 +82,11 @@ namespace CoheeCreative
                     string[] remotePaths = remotePathArray.Split('|').Where(x => !string.IsNullOrEmpty(x)).ToArray();
                     m_RemotePaths = new List<string>(remotePaths);
                     m_RemotePathsCount = m_RemotePaths.Count;
+                }
+                else
+                {
+                    m_RemotePaths = new List<string>();
+                    m_RemotePaths.Add("https://github.com/UnityCommunity/UnityLibrary");
                 }
 
                 if (EditorPrefs.HasKey("ScriptFinderDefaultImportFolder"))
@@ -312,6 +318,11 @@ namespace CoheeCreative
                 }
             }
 
+            if (m_Results.Count == 0 && m_LocalPaths.Count > 0)
+            {
+                Debug.Log("Cannot find any inside local paths.");
+            }
+
             //Remote
             for (int i = 0; i < m_RemotePaths.Count; i++)
             {
@@ -331,7 +342,15 @@ namespace CoheeCreative
                 var repoOwner = url.Substring(0, repoNameStartIndex - 1);
                 repoOwner = repoOwner.Substring(repoOwner.LastIndexOf('/') + 1);
                 var octokitResults = await ListContentsOctokit(searchTerm, repoOwner, repoName, url);
-                m_Results.AddRange(octokitResults);
+                if(octokitResults.Count() == 0)
+                {
+                    Debug.Log($"Cannot find any inside {url}.");
+                }
+                else
+                {
+                    m_Results.AddRange(octokitResults);
+
+                }
 
                 Repaint();
 
@@ -382,7 +401,8 @@ namespace CoheeCreative
             yield return new WaitForSeconds(m_Timeout);
 
             //Timeout 
-            Debug.LogWarning("ScriptFinder: Github request timeout!! Consider checking username, password (if using) and remote paths.");
+            Debug.LogWarning("ScriptFinder: Github request takes too long!! Consider checking username, password (if using), remote paths and network connection." +
+                             "Note that this can also happen if there are too many scripts to collect.");
 
         }
 
